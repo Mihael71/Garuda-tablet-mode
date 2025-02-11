@@ -5,3 +5,4 @@ need to install:
 iio-sensor-proxy
 python-pydbus
 python-evdev
+maliit-keyboard
