@@ -4,25 +4,56 @@ import subprocess
 from pydbus import SystemBus
 from evdev import InputDevice, list_devices
 
-def find_keyboard_device():
+def find_keyboard_device_name():
     """
-    Sucht in den /dev/input/event*-Geräten nach einem, dessen Name
-    auf eine interne Tastatur hindeutet (z. B. enthält "keyboard" oder "at translated").
-    Passe den Filter ggf. an dein Gerät an!
+    Sucht in /dev/input/event*-Geräten nach einem Gerät, dessen Name auf eine interne Tastatur hindeutet.
+    Rückgabe: Der Gerätename als String (z. B. "AT Translated Set 2 keyboard"), der für den hyprctl-Befehl genutzt wird.
+    Passe den Filter ggf. an, falls dein Gerät einen anderen Namen hat.
     """
     for dev_path in list_devices():
         try:
             dev = InputDevice(dev_path)
             name_lower = dev.name.lower()
             if "keyboard" in name_lower or "at translated" in name_lower:
-                print(f"Gefundene physische Tastatur: {dev.name} ({dev_path})")
-                return dev
-        except Exception as e:
+                print(f"Gefundene Tastatur: {dev.name} ({dev_path})")
+                return dev.name
+        except Exception:
             continue
     return None
 
+def disable_internal_keyboard(keyboard_name):
+    """
+    Deaktiviert die interne Tastatur über hyprctl.
+    Erwarteter Befehl (Beispiel): 
+      hyprctl keyword input "AT Translated Set 2 keyboard,disable,1"
+    Passe diesen Befehl an deine Gegebenheiten an, falls nötig.
+    """
+    print(f"Deaktiviere interne Tastatur: {keyboard_name}")
+    subprocess.call(["hyprctl", "keyword", "input", f"{keyboard_name},disable,1"])
+
+def enable_internal_keyboard(keyboard_name):
+    """
+    Aktiviert die interne Tastatur über hyprctl.
+    Erwarteter Befehl (Beispiel): 
+      hyprctl keyword input "AT Translated Set 2 keyboard,disable,0"
+    """
+    print(f"Aktiviere interne Tastatur: {keyboard_name}")
+    subprocess.call(["hyprctl", "keyword", "input", f"{keyboard_name},disable,0"])
+
+def rotate_display(rotation):
+    """
+    Dreht das Display über hyprctl.
+    Parameter rotation sollte "normal" oder "180" sein.
+    Der Befehl setzt per Beispiel:
+      hyprctl keyword monitor "eDP-1,transform,180"
+    Passe 'monitor_name' an dein Setup an.
+    """
+    monitor_name = "eDP-1"  # Anpassen, falls nötig
+    print(f"Setze Displayrotation auf {rotation}°")
+    subprocess.call(["hyprctl", "keyword", "monitor", f"{monitor_name},transform,{rotation}"])
+
 def main():
-    # Verbindung zum Systembus und zum iio-sensor-proxy herstellen
+    # Verbindung zum Systembus und iio-sensor-proxy herstellen
     bus = SystemBus()
     try:
         sensor_proxy = bus.get("net.hadess.SensorProxy", "/net/hadess/SensorProxy")
@@ -30,21 +61,21 @@ def main():
         print("Fehler beim Verbinden mit iio-sensor-proxy:", e)
         return
 
-    # Interne (physische) Tastatur suchen
-    keyboard_dev = find_keyboard_device()
-    if not keyboard_dev:
-        print("Physische Tastatur nicht gefunden!")
+    # Ermittele den Namen der internen Tastatur
+    keyboard_name = find_keyboard_device_name()
+    if not keyboard_name:
+        print("Interne Tastatur nicht gefunden!")
         return
 
     keyboard_disabled = False
+    current_rotation = "normal"  # Ausgangszustand des Displays
     last_orientation = None
-    vk_process = None  # Hier halten wir den Prozess der virtuellen Tastatur
 
     print("Starte Sensorüberwachung. Drücke STRG+C zum Beenden.")
     try:
         while True:
-            # Lese die aktuelle Ausrichtung vom Accelerometer (über iio-sensor-proxy)
             try:
+                # Lese die aktuelle Orientierung (z. B. "normal" oder "bottom-up")
                 orientation = sensor_proxy.AccelerometerOrientation
             except Exception as e:
                 print("Fehler beim Abrufen der Orientierung:", e)
@@ -55,58 +86,30 @@ def main():
                 print("Ausrichtung geändert:", orientation)
                 last_orientation = orientation
 
-            # Wenn die Orientierung "bottom-up" ist, interpretieren wir das als Tabletmodus
             if orientation == "bottom-up":
-                # Physische Tastatur deaktivieren
+                # Tabletmodus: Interne Tastatur deaktivieren und Display um 180° drehen
                 if not keyboard_disabled:
-                    try:
-                        keyboard_dev.grab()  # Blockiert die physische Tastatur
-                        keyboard_disabled = True
-                        print("Physische Tastatur deaktiviert (Tabletmodus).")
-                    except Exception as e:
-                        print("Fehler beim Deaktivieren der Tastatur:", e)
-                # Virtuelle Tastatur starten, falls noch nicht geschehen
-                if vk_process is None:
-                    try:
-                        vk_process = subprocess.Popen(["maliit-keyboard"])
-                        print("Virtuelle Tastatur gestartet.")
-                    except Exception as e:
-                        print("Fehler beim Starten der virtuellen Tastatur:", e)
+                    disable_internal_keyboard(keyboard_name)
+                    keyboard_disabled = True
+                if current_rotation != "180":
+                    rotate_display("180")
+                    current_rotation = "180"
             else:
-                # Tabletmodus ist nicht aktiv – also physische Tastatur freigeben
+                # Anderer Modus (z. B. Laptopmodus): Tastatur aktivieren und Display zurücksetzen
                 if keyboard_disabled:
-                    try:
-                        keyboard_dev.ungrab()
-                        keyboard_disabled = False
-                        print("Physische Tastatur aktiviert (Laptopmodus).")
-                    except Exception as e:
-                        print("Fehler beim Aktivieren der Tastatur:", e)
-                # Virtuelle Tastatur beenden, falls sie läuft
-                if vk_process is not None:
-                    try:
-                        vk_process.terminate()
-                        vk_process.wait(timeout=5)
-                        print("Virtuelle Tastatur beendet.")
-                    except Exception as e:
-                        print("Fehler beim Beenden der virtuellen Tastatur:", e)
-                    vk_process = None
+                    enable_internal_keyboard(keyboard_name)
+                    keyboard_disabled = False
+                if current_rotation != "normal":
+                    rotate_display("normal")
+                    current_rotation = "normal"
 
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("Beende das Skript...")
         if keyboard_disabled:
-            try:
-                keyboard_dev.ungrab()
-                print("Physische Tastatur wieder aktiviert.")
-            except Exception as e:
-                print("Fehler beim Freigeben der Tastatur:", e)
-        if vk_process is not None:
-            try:
-                vk_process.terminate()
-                vk_process.wait(timeout=5)
-                print("Virtuelle Tastatur beendet.")
-            except Exception as e:
-                print("Fehler beim Beenden der virtuellen Tastatur:", e)
+            enable_internal_keyboard(keyboard_name)
+        if current_rotation != "normal":
+            rotate_display("normal")
 
 if __name__ == '__main__':
     main()
