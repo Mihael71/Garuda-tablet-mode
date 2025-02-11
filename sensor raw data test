@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+import glob
+import os
+import math
+
+def find_iio_device():
+    # Sucht nach einem IIO-Gerät, das in_accel_x_raw besitzt.
+    for device in glob.glob('/sys/bus/iio/devices/iio:device*'):
+        if os.path.exists(os.path.join(device, 'in_accel_x_raw')):
+            return device
+    return None
+
+def read_accel(device):
+    def read_value(filename):
+        with open(os.path.join(device, filename), 'r') as f:
+            return float(f.read().strip())
+
+    # Lese Rohwerte
+    x_raw = read_value('in_accel_x_raw')
+    y_raw = read_value('in_accel_y_raw')
+    z_raw = read_value('in_accel_z_raw')
+    # Lese Skalierungsfaktor (angenommen, alle Achsen nutzen den gleichen Wert)
+    scale = read_value('in_accel_scale')
+
+    # Umrechnen in physikalische Größen (z. B. m/s²)
+    x = x_raw * scale
+    y = y_raw * scale
+    z = z_raw * scale
+    return x, y, z
+
+def calculate_pitch_roll(x, y, z):
+    # Berechnet beispielsweise Pitch und Roll aus den Beschleunigungswerten.
+    # Diese Formeln sind einfache Näherungen unter der Annahme, dass die einzige
+    # Beschleunigung die Erdbeschleunigung ist.
+    pitch = math.degrees(math.atan2(x, math.sqrt(y*y + z*z)))
+    roll  = math.degrees(math.atan2(y, math.sqrt(x*x + z*z)))
+    return pitch, roll
+
+def main():
+    device = find_iio_device()
+    if not device:
+        print("Kein IIO-Gerät mit Beschleunigungssensor gefunden.")
+        return
+
+    print("Lese Rohdaten vom Sensor:")
+    while True:
+        x, y, z = read_accel(device)
+        pitch, roll = calculate_pitch_roll(x, y, z)
+        print(f"Accelerometer: x={x:.2f}, y={y:.2f}, z={z:.2f}  -->  Pitch={pitch:.1f}°, Roll={roll:.1f}°")
+        # Hier könntest du eigene Schwellen definieren, z. B.:
+        # if pitch > 30 and pitch < 60: -> Zwischenstufe A
+        # if pitch >= 60: -> Tabletmodus, etc.
+        # Und entsprechend dein Verhalten (Tastatur deaktivieren, Display drehen) steuern.
+        import time
+        time.sleep(0.5)
+
+if __name__ == '__main__':
+    main()
