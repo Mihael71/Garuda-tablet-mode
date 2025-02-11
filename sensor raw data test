@@ -2,39 +2,62 @@
 import glob
 import os
 import math
+import time
 
 def find_iio_device():
-    # Sucht nach einem IIO-Gerät, das in_accel_x_raw besitzt.
+    """
+    Sucht im Verzeichnis /sys/bus/iio/devices/ nach einem Gerät,
+    das einen Beschleunigungssensor zur Verfügung stellt (z. B. die Datei in_accel_x_raw existiert).
+    """
     for device in glob.glob('/sys/bus/iio/devices/iio:device*'):
         if os.path.exists(os.path.join(device, 'in_accel_x_raw')):
             return device
     return None
 
 def read_accel(device):
+    """
+    Liest die Rohwerte des Beschleunigungssensors (x, y, z) und den Skalierungsfaktor.
+    Rechnet die Rohwerte in physikalische Einheiten um.
+    """
     def read_value(filename):
         with open(os.path.join(device, filename), 'r') as f:
             return float(f.read().strip())
-
-    # Lese Rohwerte
+    
     x_raw = read_value('in_accel_x_raw')
     y_raw = read_value('in_accel_y_raw')
     z_raw = read_value('in_accel_z_raw')
-    # Lese Skalierungsfaktor (angenommen, alle Achsen nutzen den gleichen Wert)
-    scale = read_value('in_accel_scale')
+    
+    # Falls vorhanden, den Skalierungsfaktor verwenden, sonst scale=1.0
+    scale_file = os.path.join(device, 'in_accel_scale')
+    if os.path.exists(scale_file):
+        scale = read_value('in_accel_scale')
+    else:
+        scale = 1.0
 
-    # Umrechnen in physikalische Größen (z. B. m/s²)
     x = x_raw * scale
     y = y_raw * scale
     z = z_raw * scale
     return x, y, z
 
-def calculate_pitch_roll(x, y, z):
-    # Berechnet beispielsweise Pitch und Roll aus den Beschleunigungswerten.
-    # Diese Formeln sind einfache Näherungen unter der Annahme, dass die einzige
-    # Beschleunigung die Erdbeschleunigung ist.
-    pitch = math.degrees(math.atan2(x, math.sqrt(y*y + z*z)))
-    roll  = math.degrees(math.atan2(y, math.sqrt(x*x + z*z)))
-    return pitch, roll
+def calculate_tilt(x, y, z):
+    """
+    Berechnet den Neigungswinkel in Grad.
+    
+    Wir interpretieren den Winkel als den Winkel zwischen dem 
+    gemessenen Beschleunigungsvektor und der Sensor-z-Achse.
+    
+    Formel:
+        angle = arccos(z / |g|)
+        
+    |g| ist dabei die Vektorlänge (Magnitude) des Beschleunigungsvektors.
+    So erhalten wir einen Winkel zwischen 0° (wenn z = |g|, also senkrecht) und 180° (wenn z = -|g|).
+    """
+    mag = math.sqrt(x*x + y*y + z*z)
+    if mag == 0:
+        return None
+    angle_rad = math.acos(z / mag)
+    angle_deg = math.degrees(angle_rad)
+    return angle_deg
 
 def main():
     device = find_iio_device()
@@ -42,17 +65,21 @@ def main():
         print("Kein IIO-Gerät mit Beschleunigungssensor gefunden.")
         return
 
-    print("Lese Rohdaten vom Sensor:")
+    print(f"Verwende IIO-Gerät: {device}")
+    print("Drücke STRG+C zum Beenden.\n")
+    
     while True:
-        x, y, z = read_accel(device)
-        pitch, roll = calculate_pitch_roll(x, y, z)
-        print(f"Accelerometer: x={x:.2f}, y={y:.2f}, z={z:.2f}  -->  Pitch={pitch:.1f}°, Roll={roll:.1f}°")
-        # Hier könntest du eigene Schwellen definieren, z. B.:
-        # if pitch > 30 and pitch < 60: -> Zwischenstufe A
-        # if pitch >= 60: -> Tabletmodus, etc.
-        # Und entsprechend dein Verhalten (Tastatur deaktivieren, Display drehen) steuern.
-        import time
-        time.sleep(0.5)
+        try:
+            x, y, z = read_accel(device)
+            tilt = calculate_tilt(x, y, z)
+            if tilt is None:
+                print("Fehler: Magnitude = 0")
+            else:
+                print(f"Neigungswinkel: {tilt:.2f}°")
+            time.sleep(0.5)
+        except KeyboardInterrupt:
+            print("\nBeendet.")
+            break
 
 if __name__ == '__main__':
     main()
